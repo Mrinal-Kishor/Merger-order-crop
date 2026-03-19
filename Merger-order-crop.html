@@ -1,0 +1,1344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PDFix — Merge & Crop Invoices</title>
+<script>
+  // Set workerSrc BEFORE pdf.js loads to prevent "fake worker" warning
+  window.pdfjsWorkerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  // Immediately configure worker after pdf.js loads
+  if (typeof pdfjsLib !== 'undefined') {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #13131c;
+    --surface2: #1c1c2e;
+    --border: #2a2a40;
+    --accent: #6c63ff;
+    --accent2: #ff6584;
+    --accent3: #43e97b;
+    --text: #e8e8f0;
+    --muted: #7a7a9a;
+    --card: #16162a;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* NOISE OVERLAY */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.4;
+  }
+
+  /* GLOW BG */
+  .bg-glow {
+    position: fixed;
+    width: 600px; height: 600px;
+    border-radius: 50%;
+    filter: blur(120px);
+    pointer-events: none;
+    z-index: 0;
+  }
+  .glow1 { top: -200px; left: -200px; background: rgba(108,99,255,0.12); }
+  .glow2 { bottom: -200px; right: -200px; background: rgba(255,101,132,0.08); }
+
+  /* NAV */
+  nav {
+    position: sticky; top: 0; z-index: 100;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 48px;
+    background: rgba(10,10,15,0.85);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border);
+  }
+  .logo {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.6rem; font-weight: 800;
+    background: linear-gradient(135deg, #6c63ff, #ff6584);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    letter-spacing: -0.5px;
+  }
+  .nav-tabs {
+    display: flex; gap: 4px;
+    background: var(--surface2);
+    border-radius: 12px; padding: 4px;
+    border: 1px solid var(--border);
+  }
+  .nav-tab {
+    padding: 8px 20px; border-radius: 9px;
+    font-size: 0.85rem; font-weight: 500;
+    cursor: pointer; transition: all 0.2s;
+    color: var(--muted); border: none; background: none;
+    font-family: 'DM Sans', sans-serif;
+  }
+  .nav-tab.active {
+    background: var(--accent);
+    color: #fff;
+    box-shadow: 0 4px 16px rgba(108,99,255,0.35);
+  }
+  .nav-tab:hover:not(.active) { color: var(--text); background: var(--border); }
+
+  /* HERO */
+  .hero {
+    text-align: center; padding: 64px 48px 40px;
+    position: relative; z-index: 1;
+  }
+  .hero-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(108,99,255,0.12);
+    border: 1px solid rgba(108,99,255,0.3);
+    border-radius: 50px; padding: 6px 16px;
+    font-size: 0.78rem; color: #a099ff;
+    margin-bottom: 24px; letter-spacing: 0.5px;
+  }
+  .hero-badge span { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); display: inline-block; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.8)} }
+
+  h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: clamp(2.2rem, 5vw, 3.8rem);
+    font-weight: 800; line-height: 1.1;
+    letter-spacing: -1.5px;
+    margin-bottom: 16px;
+  }
+  h1 em { font-style: normal; background: linear-gradient(135deg, #6c63ff, #ff6584); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .hero p { color: var(--muted); font-size: 1.05rem; max-width: 500px; margin: 0 auto; line-height: 1.7; }
+
+  /* MAIN CONTENT */
+  .content { position: relative; z-index: 1; padding: 0 48px 80px; max-width: 1100px; margin: 0 auto; }
+
+  /* PANEL */
+  .panel { display: none; }
+  .panel.active { display: block; animation: fadeUp 0.3s ease; }
+  @keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+
+  /* SECTION TITLE */
+  .section-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.1rem; font-weight: 700;
+    margin-bottom: 16px; display: flex; align-items: center; gap: 10px;
+  }
+  .section-title .tag {
+    font-size: 0.7rem; font-weight: 600; padding: 3px 10px;
+    border-radius: 50px; letter-spacing: 0.5px;
+    font-family: 'DM Sans', sans-serif;
+  }
+  .tag-blue { background: rgba(108,99,255,0.15); color: #a099ff; border: 1px solid rgba(108,99,255,0.25); }
+  .tag-pink { background: rgba(255,101,132,0.15); color: #ff8aa3; border: 1px solid rgba(255,101,132,0.25); }
+  .tag-green { background: rgba(67,233,123,0.12); color: #43e97b; border: 1px solid rgba(67,233,123,0.2); }
+
+  /* DROP ZONE */
+  .drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 20px;
+    padding: 48px 32px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.25s;
+    background: var(--card);
+    position: relative;
+    overflow: hidden;
+  }
+  .drop-zone::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(circle at 50% 50%, rgba(108,99,255,0.05) 0%, transparent 70%);
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent);
+    background: rgba(108,99,255,0.06);
+    transform: scale(1.005);
+  }
+  .drop-zone input { display: none; }
+  .drop-icon {
+    width: 60px; height: 60px; border-radius: 16px;
+    background: linear-gradient(135deg, rgba(108,99,255,0.25), rgba(255,101,132,0.15));
+    display: flex; align-items: center; justify-content: center;
+    margin: 0 auto 16px; font-size: 1.8rem;
+    border: 1px solid rgba(108,99,255,0.2);
+  }
+  .drop-zone h3 { font-family: 'Syne', sans-serif; font-size: 1.05rem; font-weight: 700; margin-bottom: 6px; }
+  .drop-zone p { color: var(--muted); font-size: 0.85rem; }
+  .drop-zone .browse { color: var(--accent); cursor: pointer; text-decoration: underline; }
+
+  /* FILE LIST */
+  .file-list { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+  .file-item {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 14px; padding: 14px 16px;
+    transition: all 0.2s; cursor: grab;
+    position: relative; overflow: hidden;
+  }
+  .file-item::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: linear-gradient(180deg, var(--accent), var(--accent2));
+    border-radius: 3px 0 0 3px;
+  }
+  .file-item:hover { border-color: rgba(108,99,255,0.3); background: rgba(108,99,255,0.04); }
+  .file-item.dragging { opacity: 0.5; cursor: grabbing; }
+  .file-thumb {
+    width: 42px; height: 52px; border-radius: 8px;
+    background: var(--surface); display: flex; align-items: center; justify-content: center;
+    font-size: 0.65rem; color: var(--muted); flex-shrink: 0;
+    border: 1px solid var(--border); overflow: hidden;
+  }
+  .file-thumb canvas { width: 100%; height: 100%; object-fit: cover; }
+  .file-info { flex: 1; min-width: 0; }
+  .file-info .name { font-weight: 500; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-info .meta { color: var(--muted); font-size: 0.78rem; margin-top: 3px; }
+  .file-actions { display: flex; gap: 8px; }
+  .icon-btn {
+    width: 32px; height: 32px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 0.85rem; transition: all 0.2s; color: var(--muted);
+  }
+  .icon-btn:hover { color: var(--accent2); border-color: var(--accent2); background: rgba(255,101,132,0.08); }
+  .drag-handle { color: var(--muted); cursor: grab; font-size: 1rem; }
+
+  /* PAGE RANGE */
+  .page-range-input {
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px;
+    padding: 4px 10px; font-size: 0.78rem; width: 80px;
+    font-family: 'DM Sans', sans-serif;
+    outline: none; transition: border 0.2s;
+  }
+  .page-range-input:focus { border-color: var(--accent); }
+
+  /* GRID LAYOUT */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media(max-width:768px) { .two-col { grid-template-columns: 1fr; } nav { padding: 14px 20px; } .content { padding: 0 20px 60px; } .hero { padding: 40px 20px 24px; } }
+
+  /* CARD */
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 20px; padding: 24px;
+  }
+
+  /* BTN */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 13px 28px; border-radius: 12px; border: none;
+    font-family: 'DM Sans', sans-serif; font-size: 0.9rem; font-weight: 600;
+    cursor: pointer; transition: all 0.22s; letter-spacing: 0.2px;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent), #8b83ff);
+    color: #fff;
+    box-shadow: 0 8px 24px rgba(108,99,255,0.3);
+  }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 12px 32px rgba(108,99,255,0.45); }
+  .btn-primary:active { transform: translateY(0); }
+  .btn-secondary {
+    background: var(--surface2); color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover { border-color: var(--accent); background: rgba(108,99,255,0.07); }
+  .btn-danger { background: rgba(255,101,132,0.12); color: var(--accent2); border: 1px solid rgba(255,101,132,0.25); }
+  .btn-danger:hover { background: rgba(255,101,132,0.2); }
+  .btn-success { background: linear-gradient(135deg, #43e97b, #38f9d7); color: #0a1a0f; }
+  .btn-success:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(67,233,123,0.3); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none !important; }
+  .btn-full { width: 100%; }
+
+  /* ACTION BAR */
+  .action-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 20px; padding: 16px 20px;
+    background: var(--surface2); border-radius: 14px; border: 1px solid var(--border);
+    flex-wrap: wrap; gap: 12px;
+  }
+  .action-bar .left { display: flex; align-items: center; gap: 12px; }
+  .count-badge {
+    background: rgba(108,99,255,0.15); color: #a099ff;
+    border: 1px solid rgba(108,99,255,0.25);
+    border-radius: 50px; padding: 4px 12px; font-size: 0.78rem; font-weight: 600;
+  }
+
+  /* PROGRESS */
+  .progress-wrap { margin-top: 16px; display: none; }
+  .progress-bar { height: 5px; background: var(--border); border-radius: 10px; overflow: hidden; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); width: 0%; transition: width 0.4s ease; border-radius: 10px; }
+  .progress-text { font-size: 0.78rem; color: var(--muted); margin-top: 8px; text-align: center; }
+
+  /* SUCCESS BOX */
+  .success-box {
+    display: none; margin-top: 20px;
+    background: rgba(67,233,123,0.07); border: 1px solid rgba(67,233,123,0.2);
+    border-radius: 16px; padding: 20px;
+    text-align: center;
+  }
+  .success-box .emoji { font-size: 2rem; margin-bottom: 8px; }
+  .success-box h3 { font-family: 'Syne', sans-serif; font-size: 1rem; margin-bottom: 6px; color: #43e97b; }
+  .success-box p { color: var(--muted); font-size: 0.82rem; margin-bottom: 16px; }
+
+  /* CROP TOOL */
+  .platforms { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+  .platform-chip {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 16px; border-radius: 50px;
+    border: 1px solid var(--border); background: var(--surface2);
+    cursor: pointer; transition: all 0.2s; font-size: 0.82rem; font-weight: 500;
+  }
+  .platform-chip.active {
+    border-color: var(--accent); background: rgba(108,99,255,0.12); color: #c0baff;
+  }
+  .platform-chip:hover:not(.active) { border-color: var(--muted); }
+
+  .crop-workspace {
+    display: grid; grid-template-columns: 1fr 320px; gap: 20px;
+    align-items: start;
+  }
+  @media(max-width:900px) { .crop-workspace { grid-template-columns: 1fr; } }
+
+  .preview-area {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 20px; padding: 20px; min-height: 400px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    position: relative; overflow: hidden;
+  }
+  .preview-canvas-wrap {
+    position: relative; display: inline-block;
+    cursor: crosshair; user-select: none;
+    max-width: 100%;
+  }
+  #previewCanvas { display: block; max-width: 100%; border-radius: 8px; }
+  .crop-overlay {
+    position: absolute; border: 2px solid var(--accent);
+    background: rgba(108,99,255,0.12); pointer-events: none;
+    display: none;
+  }
+  .corner-handle {
+    position: absolute; width: 10px; height: 10px;
+    background: var(--accent); border-radius: 2px;
+    pointer-events: none;
+  }
+  .corner-handle.tl { top: -5px; left: -5px; }
+  .corner-handle.tr { top: -5px; right: -5px; }
+  .corner-handle.bl { bottom: -5px; left: -5px; }
+  .corner-handle.br { bottom: -5px; right: -5px; }
+
+  .crop-panel { display: flex; flex-direction: column; gap: 14px; }
+
+  .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .preset-btn {
+    padding: 10px 12px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--surface2);
+    color: var(--text); cursor: pointer; font-size: 0.78rem;
+    font-family: 'DM Sans', sans-serif; transition: all 0.2s;
+    text-align: left;
+  }
+  .preset-btn:hover { border-color: var(--accent); background: rgba(108,99,255,0.07); }
+  .preset-btn .preset-name { font-weight: 600; display: block; margin-bottom: 2px; }
+  .preset-btn .preset-desc { color: var(--muted); font-size: 0.7rem; }
+
+  .coord-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .coord-item label { font-size: 0.72rem; color: var(--muted); display: block; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .coord-input {
+    width: 100%; background: var(--surface); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: 8px 10px;
+    font-size: 0.85rem; font-family: 'DM Sans', sans-serif; outline: none;
+    transition: border 0.2s;
+  }
+  .coord-input:focus { border-color: var(--accent); }
+
+  .divider { height: 1px; background: var(--border); }
+
+  /* EMPTY STATE */
+  .empty-state {
+    text-align: center; padding: 48px 20px; color: var(--muted);
+  }
+  .empty-state .icon { font-size: 3rem; margin-bottom: 12px; opacity: 0.4; }
+  .empty-state p { font-size: 0.9rem; }
+
+  /* TABS WITHIN */
+  .inner-tabs { display: flex; gap: 4px; margin-bottom: 20px; }
+  .inner-tab {
+    padding: 7px 16px; border-radius: 8px;
+    font-size: 0.82rem; font-weight: 500; cursor: pointer;
+    color: var(--muted); border: none; background: none;
+    font-family: 'DM Sans', sans-serif; transition: all 0.2s;
+  }
+  .inner-tab.active { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .inner-tab:hover:not(.active) { color: var(--text); }
+
+  /* TOAST */
+  .toast {
+    position: fixed; bottom: 32px; right: 32px; z-index: 9999;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 14px; padding: 14px 20px;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 0.85rem; transform: translateY(80px); opacity: 0;
+    transition: all 0.3s; max-width: 320px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast.success { border-color: rgba(67,233,123,0.3); }
+  .toast.error { border-color: rgba(255,101,132,0.3); }
+
+  .page-nav { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+  .page-nav button {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); cursor: pointer; font-size: 1rem;
+    transition: all 0.2s;
+  }
+  .page-nav button:hover { border-color: var(--accent); color: var(--accent); }
+  .page-nav span { font-size: 0.82rem; color: var(--muted); }
+
+  .order-hint {
+    font-size: 0.75rem; color: var(--muted);
+    display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
+  }
+
+  /* RESULTS GRID */
+  .results-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px; margin-top: 16px; }
+  .result-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    overflow: hidden; transition: all 0.2s;
+  }
+  .result-card:hover { border-color: rgba(67,233,123,0.3); transform: translateY(-2px); }
+  .result-thumb { background: var(--surface2); height: 120px; display: flex; align-items: center; justify-content: center; font-size: 2rem; }
+  .result-info { padding: 10px 12px; }
+  .result-info .r-name { font-size: 0.78rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .result-info .r-meta { font-size: 0.7rem; color: var(--muted); margin-top: 2px; }
+  .result-info .r-dl {
+    display: block; margin-top: 8px;
+    background: rgba(67,233,123,0.1); color: #43e97b; border: 1px solid rgba(67,233,123,0.2);
+    border-radius: 8px; padding: 5px; font-size: 0.72rem; text-align: center;
+    cursor: pointer; text-decoration: none; transition: all 0.2s;
+  }
+  .result-info .r-dl:hover { background: rgba(67,233,123,0.2); }
+</style>
+</head>
+<body>
+
+<div class="bg-glow glow1"></div>
+<div class="bg-glow glow2"></div>
+
+<nav>
+  <div class="logo">PDFix</div>
+  <div class="nav-tabs">
+    <button class="nav-tab active" onclick="switchTab('merge')">⊕ Merge PDFs</button>
+    <button class="nav-tab" onclick="switchTab('crop')">✂ Crop Invoice</button>
+  </div>
+</nav>
+
+<div class="hero">
+  <div class="hero-badge"><span></span> Free · No Upload · Works in Browser</div>
+  <h1>PDF Tools for<br><em>Sellers & Shippers</em></h1>
+  <p>Merge multiple PDFs or crop invoices from Flipkart, Meesho, Amazon & more — instantly in your browser.</p>
+</div>
+
+<div class="content">
+
+  <!-- MERGE PANEL -->
+  <div class="panel active" id="panel-merge">
+    <div class="section-title">
+      Merge PDFs <span class="tag tag-blue">DRAG TO REORDER</span>
+    </div>
+
+    <div class="drop-zone" id="mergeDrop" onclick="document.getElementById('mergeInput').click()">
+      <input type="file" id="mergeInput" multiple accept=".pdf" onchange="handleMergeFiles(this.files)">
+      <div class="drop-icon">📄</div>
+      <h3>Drop PDF files here</h3>
+      <p>or <span class="browse">browse files</span> from your device</p>
+      <p style="margin-top:8px;font-size:0.75rem;color:#555">Supports multiple PDFs · Drag to reorder</p>
+    </div>
+
+    <div id="mergeFileList" class="file-list" style="margin-top:16px;"></div>
+
+    <div class="action-bar" id="mergeActionBar" style="display:none;">
+      <div class="left">
+        <span class="count-badge" id="mergeCount">0 files</span>
+        <span style="font-size:0.82rem;color:var(--muted)">Drag files to reorder</span>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-secondary" onclick="clearMerge()">✕ Clear All</button>
+        <button class="btn btn-primary" onclick="mergePDFs()" id="mergeBtn">⊕ Merge PDFs</button>
+      </div>
+    </div>
+
+
+    <!-- SKU ORDER OPTIONS -->
+    <div id="skuOptions" style="display:none;margin-top:10px;">
+      <div class="card" style="padding:16px 20px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="font-size:0.88rem;font-weight:600;font-family:'Syne',sans-serif;">Sort by SKU ID</span>
+            <span class="tag tag-pink">AUTO-DETECT</span>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-secondary" style="padding:8px 14px;font-size:0.8rem;" onclick="sortBySKU('asc')">↑ A → Z</button>
+            <button class="btn btn-secondary" style="padding:8px 14px;font-size:0.8rem;" onclick="sortBySKU('desc')">↓ Z → A</button>
+            <button class="btn btn-secondary" style="padding:8px 14px;font-size:0.8rem;" onclick="sortBySKU('num')">🔢 Numeric</button>
+            <button class="btn btn-secondary" style="padding:8px 14px;font-size:0.8rem;" onclick="resetSKUOrder()">↺ Original</button>
+          </div>
+        </div>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+          <div style="font-size:0.75rem;color:var(--muted);margin-bottom:8px;">
+            SKU IDs auto-detected from filenames. Edit manually if needed:
+          </div>
+          <div id="skuInputList" style="display:flex;flex-direction:column;gap:6px;max-height:220px;overflow-y:auto;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE NUMBER OPTIONS -->
+    <div id="pageNumOptions" style="display:none;margin-top:14px;">
+      <div class="card" style="padding:18px 20px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.88rem;font-weight:600;">
+              <input type="checkbox" id="enablePageNums" style="accent-color:var(--accent);width:16px;height:16px;" onchange="togglePageNumSettings()">
+              <span>Add Page Numbers</span>
+            </label>
+            <span class="tag tag-blue">TOP &amp; BOTTOM</span>
+          </div>
+          <div id="pageNumSettings" style="display:none;flex-wrap:wrap;align-items:center;gap:14px;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <label style="font-size:0.78rem;color:var(--muted);">Format:</label>
+              <select id="pageNumFormat" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:5px 10px;font-size:0.8rem;font-family:'DM Sans',sans-serif;outline:none;">
+                <option value="page">Page 1</option>
+                <option value="pageoftotal">Page 1 of 10</option>
+                <option value="number">1</option>
+                <option value="dash">-- 1 --</option>
+              </select>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <label style="font-size:0.78rem;color:var(--muted);">Size:</label>
+              <select id="pageNumSize" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:5px 10px;font-size:0.8rem;font-family:'DM Sans',sans-serif;outline:none;">
+                <option value="8">Small (8pt)</option>
+                <option value="10" selected>Normal (10pt)</option>
+                <option value="12">Large (12pt)</option>
+                <option value="14">XL (14pt)</option>
+              </select>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <label style="font-size:0.78rem;color:var(--muted);">Start from:</label>
+              <input type="number" id="pageNumStart" value="1" min="1" max="999"
+                style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:5px 8px;font-size:0.8rem;width:60px;outline:none;font-family:'DM Sans',sans-serif;">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="progress-wrap" id="mergeProgress">
+      <div class="progress-bar"><div class="progress-fill" id="mergeFill"></div></div>
+      <div class="progress-text" id="mergeProgressText">Processing...</div>
+    </div>
+
+    <div class="success-box" id="mergeSuccess">
+      <div class="emoji">🎉</div>
+      <h3>Merged Successfully!</h3>
+      <p id="mergeSuccessMsg"></p>
+      <button class="btn btn-success" onclick="downloadMerged()">⬇ Download Merged PDF</button>
+    </div>
+  </div>
+
+  <!-- CROP PANEL -->
+  <div class="panel" id="panel-crop">
+    <div class="section-title">
+      Crop Invoice <span class="tag tag-pink">SMART PRESETS</span>
+    </div>
+
+    <div class="platforms">
+      <div class="platform-chip active" data-platform="custom" onclick="selectPlatform(this)">⚙ Custom</div>
+      <div class="platform-chip" data-platform="amazon" onclick="selectPlatform(this)">📦 Amazon</div>
+      <div class="platform-chip" data-platform="flipkart" onclick="selectPlatform(this)">🛍 Flipkart</div>
+      <div class="platform-chip" data-platform="meesho" onclick="selectPlatform(this)">🌸 Meesho</div>
+      <div class="platform-chip" data-platform="myntra" onclick="selectPlatform(this)">👗 Myntra</div>
+      <div class="platform-chip" data-platform="snapdeal" onclick="selectPlatform(this)">🤝 Snapdeal</div>
+    </div>
+
+    <div id="cropFileWrap">
+      <div class="drop-zone" id="cropDrop" onclick="document.getElementById('cropInput').click()" style="margin-bottom:20px;">
+        <input type="file" id="cropInput" accept=".pdf" onchange="handleCropFile(this.files[0])">
+        <div class="drop-icon">✂️</div>
+        <h3>Drop your invoice PDF here</h3>
+        <p>or <span class="browse">browse file</span> — single PDF</p>
+      </div>
+    </div>
+
+    <div id="cropWorkspace" style="display:none;">
+      <div class="crop-workspace">
+        <div class="preview-area" id="previewArea">
+          <div class="preview-canvas-wrap" id="canvasWrap">
+            <canvas id="previewCanvas"></canvas>
+            <div class="crop-overlay" id="cropOverlay">
+              <div class="corner-handle tl"></div>
+              <div class="corner-handle tr"></div>
+              <div class="corner-handle bl"></div>
+              <div class="corner-handle br"></div>
+            </div>
+          </div>
+          <div class="page-nav">
+            <button onclick="changePage(-1)">‹</button>
+            <span id="pageLabel">Page 1 / 1</span>
+            <button onclick="changePage(1)">›</button>
+          </div>
+        </div>
+
+        <div class="crop-panel">
+          <div class="card">
+            <div class="section-title" style="font-size:0.88rem;margin-bottom:12px;">Quick Presets <span class="tag tag-pink">PLATFORM</span></div>
+            <div class="preset-grid">
+              <button class="preset-btn" onclick="applyPreset(0,0,100,50)">
+                <span class="preset-name">Top Half</span>
+                <span class="preset-desc">Upper 50%</span>
+              </button>
+              <button class="preset-btn" onclick="applyPreset(0,50,100,100)">
+                <span class="preset-name">Bottom Half</span>
+                <span class="preset-desc">Lower 50%</span>
+              </button>
+              <button class="preset-btn" onclick="applyPreset(0,0,100,33)">
+                <span class="preset-name">Top Third</span>
+                <span class="preset-desc">Upper 33%</span>
+              </button>
+              <button class="preset-btn" onclick="applyPreset(0,33,100,66)">
+                <span class="preset-name">Mid Third</span>
+                <span class="preset-desc">Middle 33%</span>
+              </button>
+              <button class="preset-btn" onclick="applyPreset(5,5,95,55)" id="presetPlatform1">
+                <span class="preset-name" id="presetP1Name">Amazon</span>
+                <span class="preset-desc" id="presetP1Desc">Label area</span>
+              </button>
+              <button class="preset-btn" onclick="applyPreset(0,0,100,45)" id="presetPlatform2">
+                <span class="preset-name" id="presetP2Name">Full Page</span>
+                <span class="preset-desc" id="presetP2Desc">Reset crop</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="section-title" style="font-size:0.88rem;margin-bottom:12px;">Manual Crop (% of page)</div>
+            <div class="coord-grid">
+              <div class="coord-item">
+                <label>Left %</label>
+                <input type="number" class="coord-input" id="cropX1" value="0" min="0" max="100" oninput="updateCropFromInputs()">
+              </div>
+              <div class="coord-item">
+                <label>Top %</label>
+                <input type="number" class="coord-input" id="cropY1" value="0" min="0" max="100" oninput="updateCropFromInputs()">
+              </div>
+              <div class="coord-item">
+                <label>Right %</label>
+                <input type="number" class="coord-input" id="cropX2" value="100" min="0" max="100" oninput="updateCropFromInputs()">
+              </div>
+              <div class="coord-item">
+                <label>Bottom %</label>
+                <input type="number" class="coord-input" id="cropY2" value="100" min="0" max="100" oninput="updateCropFromInputs()">
+              </div>
+            </div>
+            <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px;">
+              <label style="font-size:0.78rem;color:var(--muted);">Apply to pages:</label>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <label style="display:flex;align-items:center;gap:5px;font-size:0.82rem;cursor:pointer;">
+                  <input type="radio" name="applyPages" value="current" checked style="accent-color:var(--accent)"> Current page
+                </label>
+                <label style="display:flex;align-items:center;gap:5px;font-size:0.82rem;cursor:pointer;">
+                  <input type="radio" name="applyPages" value="all" style="accent-color:var(--accent)"> All pages
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="divider"></div>
+
+          <button class="btn btn-primary btn-full" onclick="cropAndDownload()">✂ Crop & Download</button>
+          <button class="btn btn-secondary btn-full" onclick="resetCrop()">↺ Upload Different PDF</button>
+        </div>
+      </div>
+
+      <div id="cropResults" style="margin-top:24px;display:none;">
+        <div class="section-title" style="font-size:0.9rem;">Cropped Results <span class="tag tag-green">READY</span></div>
+        <div class="results-grid" id="cropResultsGrid"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ─── STATE ───────────────────────────────────────────────────────────────────
+let mergeFiles = [];
+let mergedPdfBytes = null;
+let cropPdfDoc = null;
+let cropPdfJsDoc = null;
+let cropCurrentPage = 1;
+let cropTotalPages = 1;
+let cropFile = null;
+let isDragging = false;
+let dragStart = {x:0, y:0};
+let cropRect = {x1:0, y1:0, x2:100, y2:100};
+let canvasScale = 1;
+let currentPlatform = 'custom';
+
+const platformPresets = {
+  amazon:   {p1:[5, 5, 98, 45],   p1name:'Amazon Label', p1desc:'Shipping label', p2:[0,45,100,100], p2name:'Invoice Part', p2desc:'Lower section'},
+  flipkart: {p1:[31, 0, 69, 46],  p1name:'Flipkart Ship', p1desc:'Top label',     p2:[0,45.5,100,100], p2name:'Flipkart Inv', p2desc:'Bottom half'},
+  meesho:   {p1:[0, 0, 100, 41.5],  p1name:'Meesho Label', p1desc:'Label area',     p2:[0,41,100,100], p2name:'Meesho Inv',  p2desc:'Invoice part'},
+  myntra:   {p1:[0, 0, 100, 45],  p1name:'Myntra Label', p1desc:'Top section',    p2:[0,45,100,100], p2name:'Myntra Inv',  p2desc:'Bottom section'},
+  snapdeal: {p1:[0, 0, 100, 50],  p1name:'Snapdeal Top', p1desc:'Ship label',     p2:[0,50,100,100], p2name:'Snapdeal Bot', p2desc:'Invoice'},
+  custom:   {p1:[5, 5, 95, 55],   p1name:'Custom 1',    p1desc:'Upper region',   p2:[0,0,100,100],  p2name:'Full Page',   p2desc:'Reset crop'},
+}; 
+
+// ─── TAB SWITCHING ────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('panel-' + tab).classList.add('active');
+  event.target.classList.add('active');
+}
+
+// ─── TOAST ────────────────────────────────────────────────────────────────────
+function showToast(msg, type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = (type==='success'?'✓ ':'⚠ ') + msg;
+  t.className = 'toast show ' + type;
+  setTimeout(()=>t.classList.remove('show'), 3000);
+}
+
+// ─── DRAG & DROP ZONES ────────────────────────────────────────────────────────
+['mergeDrop','cropDrop'].forEach(id => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('drag-over'); });
+  el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
+  el.addEventListener('drop', e => {
+    e.preventDefault(); el.classList.remove('drag-over');
+    if (id === 'mergeDrop') handleMergeFiles(e.dataTransfer.files);
+    else handleCropFile(e.dataTransfer.files[0]);
+  });
+});
+
+// ─── MERGE ────────────────────────────────────────────────────────────────────
+async function handleMergeFiles(files) {
+  for (const file of files) {
+    if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
+      showToast(file.name + ' is not a PDF', 'error'); continue;
+    }
+    try {
+      const rawBuffer = await file.arrayBuffer();
+      // Store as Uint8Array so it never gets detached between uses
+      const bytes = new Uint8Array(rawBuffer);
+      const pdfDoc = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+      const skuId = extractSKU(file.name);
+      mergeFiles.push({ file, bytes, pages: pdfDoc.numPages, name: file.name, size: file.size, pageRange: '', skuId, originalIdx: mergeFiles.length });
+    } catch(e) {
+      showToast('Could not read ' + file.name + ': ' + e.message, 'error');
+    }
+  }
+  renderMergeList();
+}
+
+
+// ─── SKU ORDER ────────────────────────────────────────────────────────────────
+function extractSKU(filename) {
+  // Remove .pdf extension
+  let name = filename.replace(/\.pdf$/i, '');
+  // Try common patterns: SKU-XXXXX, SKU_XXXXX, #XXXXX, after last _ or - or space
+  // Pattern 1: explicit SKU keyword
+  let m = name.match(/(?:sku[-_:]?\s*)([A-Z0-9\-_]+)/i);
+  if (m) return m[1].toUpperCase();
+  // Pattern 2: all-caps alphanumeric block (like INV-0023, ABC123)
+  m = name.match(/\b([A-Z]{2,}[-_]?\d+)\b/i);
+  if (m) return m[1].toUpperCase();
+  // Pattern 3: leading number block
+  m = name.match(/^(\d+)/);
+  if (m) return m[1];
+  // Pattern 4: any alphanumeric token after a separator
+  m = name.split(/[-_\s]+/);
+  if (m.length > 1) return m[m.length - 1].toUpperCase();
+  // Fallback: whole name
+  return name.toUpperCase();
+}
+
+function renderSKUInputs() {
+  const list = document.getElementById('skuInputList');
+  list.innerHTML = '';
+  mergeFiles.forEach((f, i) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;';
+    row.innerHTML = `
+      <span style="font-size:0.75rem;color:var(--muted);min-width:16px;text-align:right;">${i+1}.</span>
+      <span style="font-size:0.78rem;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);">${f.name}</span>
+      <input type="text" value="${f.skuId||''}" placeholder="SKU ID"
+        style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:4px 10px;font-size:0.78rem;width:130px;outline:none;font-family:'DM Sans',sans-serif;"
+        oninput="mergeFiles[${i}].skuId=this.value.trim();"
+        onfocus="this.style.borderColor='var(--accent)'"
+        onblur="this.style.borderColor='var(--border)'">`;
+    list.appendChild(row);
+  });
+}
+
+let originalOrder = null;
+
+function sortBySKU(dir) {
+  if (!originalOrder) originalOrder = [...mergeFiles];
+  mergeFiles.sort((a, b) => {
+    const sa = (a.skuId || '').trim();
+    const sb = (b.skuId || '').trim();
+    if (dir === 'num') {
+      const na = parseFloat(sa.replace(/[^0-9.]/g,'')) || 0;
+      const nb = parseFloat(sb.replace(/[^0-9.]/g,'')) || 0;
+      return na - nb;
+    }
+    const cmp = sa.localeCompare(sb, undefined, {numeric: true, sensitivity: 'base'});
+    return dir === 'asc' ? cmp : -cmp;
+  });
+  renderMergeList();
+  showToast('Sorted by SKU (' + (dir==='asc'?'A→Z':dir==='desc'?'Z→A':'Numeric') + ')');
+}
+
+function resetSKUOrder() {
+  if (originalOrder) {
+    mergeFiles = [...originalOrder];
+    originalOrder = null;
+  }
+  renderMergeList();
+  showToast('Order reset to original');
+}
+
+function renderMergeList() {
+  const list = document.getElementById('mergeFileList');
+  const bar = document.getElementById('mergeActionBar');
+  list.innerHTML = '';
+  if (mergeFiles.length === 0) { bar.style.display='none'; document.getElementById('pageNumOptions').style.display='none'; document.getElementById('skuOptions').style.display='none'; return; }
+  bar.style.display = 'flex';
+  document.getElementById('pageNumOptions').style.display = 'block';
+  document.getElementById('skuOptions').style.display = 'block';
+  renderSKUInputs();
+  document.getElementById('mergeCount').textContent = mergeFiles.length + ' file' + (mergeFiles.length!==1?'s':'');
+
+  mergeFiles.forEach((f, i) => {
+    const item = document.createElement('div');
+    item.className = 'file-item';
+    item.draggable = true;
+    item.dataset.idx = i;
+    item.innerHTML = `
+      <div class="drag-handle">⠿</div>
+      <div class="file-thumb" id="thumb-${i}"><span style="font-size:1.2rem">📄</span></div>
+      <div class="file-info">
+        <div class="name">${f.name}</div>
+        <div class="meta">${f.pages} page${f.pages!==1?'s':''} · ${(f.size/1024).toFixed(1)} KB · <span style='color:#a099ff;font-weight:600;'>SKU: ${f.skuId||'—'}</span></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <input class="page-range-input" placeholder="e.g. 1-3" title="Page range" value="${f.pageRange}"
+          onchange="mergeFiles[${i}].pageRange=this.value" style="width:90px;">
+        <div class="file-actions">
+          <div class="icon-btn" title="Move up" onclick="moveMerge(${i},-1)">↑</div>
+          <div class="icon-btn" title="Move down" onclick="moveMerge(${i},1)">↓</div>
+          <div class="icon-btn" title="Remove" onclick="removeMerge(${i})">✕</div>
+        </div>
+      </div>`;
+    
+    // Drag events
+    item.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', i); item.classList.add('dragging'); });
+    item.addEventListener('dragend', () => item.classList.remove('dragging'));
+    item.addEventListener('dragover', e => { e.preventDefault(); });
+    item.addEventListener('drop', e => {
+      e.preventDefault();
+      const from = parseInt(e.dataTransfer.getData('text/plain'));
+      const to = parseInt(item.dataset.idx);
+      if (from !== to) {
+        const moved = mergeFiles.splice(from, 1)[0];
+        mergeFiles.splice(to, 0, moved);
+        renderMergeList();
+      }
+    });
+
+    list.appendChild(item);
+    renderThumb(f.bytes, i);
+  });
+  // refresh SKU input list to reflect new order
+  if (document.getElementById('skuOptions').style.display !== 'none') renderSKUInputs();
+}
+
+async function renderThumb(bytes, idx) {
+  try {
+    const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+    const page = await pdf.getPage(1);
+    const vp = page.getViewport({scale: 0.5});
+    const canvas = document.createElement('canvas');
+    canvas.width = vp.width; canvas.height = vp.height;
+    await page.render({canvasContext: canvas.getContext('2d'), viewport: vp}).promise;
+    const thumb = document.getElementById('thumb-' + idx);
+    if (thumb) { thumb.innerHTML = ''; thumb.appendChild(canvas); }
+  } catch(e) { console.warn('Thumb error:', e); }
+}
+
+function moveMerge(idx, dir) {
+  const ni = idx + dir;
+  if (ni < 0 || ni >= mergeFiles.length) return;
+  [mergeFiles[idx], mergeFiles[ni]] = [mergeFiles[ni], mergeFiles[idx]];
+  renderMergeList();
+}
+function removeMerge(idx) {
+  mergeFiles.splice(idx, 1);
+  mergedPdfBytes = null;
+  document.getElementById('mergeSuccess').style.display = 'none';
+  renderMergeList();
+}
+function clearMerge() {
+  mergeFiles = []; mergedPdfBytes = null;
+  document.getElementById('mergeSuccess').style.display = 'none';
+  document.getElementById('mergeProgress').style.display = 'none';
+  document.getElementById('pageNumOptions').style.display = 'none';
+  document.getElementById('skuOptions').style.display = 'none';
+  renderMergeList();
+}
+
+function parsePageRange(rangeStr, total) {
+  if (!rangeStr.trim()) return Array.from({length:total}, (_,i)=>i+1);
+  const pages = [];
+  rangeStr.split(',').forEach(part => {
+    part = part.trim();
+    if (part.includes('-')) {
+      const [a,b] = part.split('-').map(Number);
+      for (let i=a; i<=Math.min(b,total); i++) if(i>0) pages.push(i);
+    } else {
+      const n = parseInt(part);
+      if (n > 0 && n <= total) pages.push(n);
+    }
+  });
+  return pages.length ? pages : Array.from({length:total}, (_,i)=>i+1);
+}
+
+function togglePageNumSettings() {
+  const enabled = document.getElementById('enablePageNums').checked;
+  const settings = document.getElementById('pageNumSettings');
+  settings.style.display = enabled ? 'flex' : 'none';
+}
+
+function getPageLabel(pageNum, totalPages) {
+  const fmt = document.getElementById('pageNumFormat').value;
+  const start = parseInt(document.getElementById('pageNumStart').value) || 1;
+  const n = pageNum + start - 1;
+  if (fmt === 'page') return 'Page ' + n;
+  if (fmt === 'pageoftotal') return 'Page ' + n + ' of ' + (totalPages + start - 1);
+  if (fmt === 'number') return String(n);
+  if (fmt === 'dash') return '-- ' + n + ' --';
+  return String(n);
+}
+
+async function addPageNumbers(pdfDoc) {
+  const _PDFLib = (window.PDFLib) ? window.PDFLib : PDFLib;
+  const { StandardFonts, rgb } = _PDFLib;
+  const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontSize = parseInt(document.getElementById('pageNumSize').value) || 10;
+  const pages = pdfDoc.getPages();
+  const totalPages = pages.length;
+  const margin = 20;
+
+  pages.forEach((page, i) => {
+    const { width, height } = page.getSize();
+    const label = getPageLabel(i + 1, totalPages);
+    const textWidth = helvetica.widthOfTextAtSize(label, fontSize);
+    const x = (width - textWidth) / 2;
+
+    // TOP page number
+    page.drawText(label, {
+      x,
+      y: height - margin - fontSize,
+      size: fontSize,
+      font: helvetica,
+      color: rgb(0.3, 0.3, 0.3),
+    });
+
+    // BOTTOM page number
+    page.drawText(label, {
+      x,
+      y: margin,
+      size: fontSize,
+      font: helvetica,
+      color: rgb(0.3, 0.3, 0.3),
+    });
+  });
+}
+
+async function mergePDFs() {
+  if (mergeFiles.length < 1) { showToast('Add at least one PDF', 'error'); return; }
+  const btn = document.getElementById('mergeBtn');
+  btn.disabled = true;
+  const prog = document.getElementById('mergeProgress');
+  prog.style.display = 'block';
+  document.getElementById('mergeSuccess').style.display = 'none';
+  document.getElementById('mergeFill').style.width = '0%';
+
+  try {
+    // Safely resolve PDFDocument from pdf-lib UMD build
+    const PDFDocument = (window.PDFLib && window.PDFLib.PDFDocument)
+      ? window.PDFLib.PDFDocument
+      : (typeof PDFLib !== 'undefined' ? PDFLib.PDFDocument : null);
+    if (!PDFDocument) throw new Error('PDF-lib not loaded. Please refresh.');
+
+    const merged = await PDFDocument.create();
+    let done = 0;
+
+    for (let fi = 0; fi < mergeFiles.length; fi++) {
+      const f = mergeFiles[fi];
+      document.getElementById('mergeFill').style.width = Math.round((fi / mergeFiles.length) * 100) + '%';
+      document.getElementById('mergeProgressText').textContent = `Loading ${f.name}…`;
+
+      // Always slice a fresh copy — ArrayBuffers can get detached after first use
+      const freshBytes = f.bytes instanceof ArrayBuffer ? f.bytes.slice(0) : f.bytes;
+      const srcDoc = await PDFDocument.load(freshBytes, { ignoreEncryption: true });
+      const totalPages = srcDoc.getPageCount();
+      const pageNums = parsePageRange(f.pageRange, totalPages);
+      const zeroIndexed = pageNums.map(n => n - 1).filter(n => n >= 0 && n < totalPages);
+      const copied = await merged.copyPages(srcDoc, zeroIndexed);
+      copied.forEach(p => merged.addPage(p));
+      done++;
+      document.getElementById('mergeFill').style.width = Math.round((done / mergeFiles.length) * 100) + '%';
+    }
+
+    document.getElementById('mergeFill').style.width = '100%';
+    document.getElementById('mergeProgressText').textContent = 'Adding page numbers…';
+    if (document.getElementById('enablePageNums').checked) {
+      await addPageNumbers(merged);
+    }
+    document.getElementById('mergeProgressText').textContent = 'Finalizing…';
+    mergedPdfBytes = await merged.save();
+
+    setTimeout(() => {
+      prog.style.display = 'none';
+      const succ = document.getElementById('mergeSuccess');
+      succ.style.display = 'block';
+      document.getElementById('mergeSuccessMsg').textContent =
+        `${mergeFiles.length} PDF${mergeFiles.length !== 1 ? 's' : ''} merged · ${(mergedPdfBytes.length / 1024).toFixed(1)} KB · Ready to download`;
+      showToast('Merged successfully!');
+    }, 300);
+  } catch(e) {
+    console.error('Merge error:', e);
+    showToast('Error: ' + e.message, 'error');
+    prog.style.display = 'none';
+  }
+  btn.disabled = false;
+}
+
+function downloadMerged() {
+  if (!mergedPdfBytes) { showToast('Nothing to download — merge first!', 'error'); return; }
+  const blob = new Blob([mergedPdfBytes], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'merged-' + Date.now() + '.pdf';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
+}
+
+// ─── CROP ────────────────────────────────────────────────────────────────────
+function selectPlatform(el) {
+  document.querySelectorAll('.platform-chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  currentPlatform = el.dataset.platform;
+  updatePlatformPresets();
+}
+
+function updatePlatformPresets() {
+  const p = platformPresets[currentPlatform] || platformPresets.custom;
+  document.getElementById('presetP1Name').textContent = p.p1name;
+  document.getElementById('presetP1Desc').textContent = p.p1desc;
+  document.getElementById('presetP2Name').textContent = p.p2name;
+  document.getElementById('presetP2Desc').textContent = p.p2desc;
+  document.getElementById('presetPlatform1').onclick = () => applyPreset(...p.p1);
+  document.getElementById('presetPlatform2').onclick = () => applyPreset(...p.p2);
+}
+
+async function handleCropFile(file) {
+  if (!file || (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf')) {
+    showToast('Please select a PDF file', 'error'); return;
+  }
+  cropFile = file;
+  const rawBuffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(rawBuffer);
+
+  const PDFDocument = (window.PDFLib && window.PDFLib.PDFDocument)
+    ? window.PDFLib.PDFDocument
+    : (typeof PDFLib !== 'undefined' ? PDFLib.PDFDocument : null);
+  if (!PDFDocument) { showToast('PDF-lib not loaded', 'error'); return; }
+
+  cropPdfDoc = await PDFDocument.load(bytes.slice(0), { ignoreEncryption: true });
+  cropPdfJsDoc = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+  cropTotalPages = cropPdfJsDoc.numPages;
+  cropCurrentPage = 1;
+  document.getElementById('cropWorkspace').style.display = 'block';
+  document.getElementById('cropFileWrap').style.display = 'none';
+  updatePlatformPresets();
+  await renderCropPreview();
+}
+
+async function renderCropPreview() {
+  const canvas = document.getElementById('previewCanvas');
+  const ctx = canvas.getContext('2d');
+  const page = await cropPdfJsDoc.getPage(cropCurrentPage);
+  const wrap = document.getElementById('canvasWrap');
+  const maxW = wrap.parentElement.clientWidth - 40;
+  const vp0 = page.getViewport({scale: 1});
+  const scale = Math.min(1.5, maxW / vp0.width);
+  canvasScale = scale;
+  const vp = page.getViewport({scale});
+  canvas.width = vp.width; canvas.height = vp.height;
+  await page.render({canvasContext: ctx, viewport: vp}).promise;
+  document.getElementById('pageLabel').textContent = `Page ${cropCurrentPage} / ${cropTotalPages}`;
+  updateCropOverlay();
+}
+
+function updateCropOverlay() {
+  const canvas = document.getElementById('previewCanvas');
+  const overlay = document.getElementById('cropOverlay');
+  const r = cropRect;
+  overlay.style.display = 'block';
+  overlay.style.left = (r.x1/100 * canvas.width) + 'px';
+  overlay.style.top = (r.y1/100 * canvas.height) + 'px';
+  overlay.style.width = ((r.x2-r.x1)/100 * canvas.width) + 'px';
+  overlay.style.height = ((r.y2-r.y1)/100 * canvas.height) + 'px';
+}
+
+function applyPreset(x1,y1,x2,y2) {
+  cropRect = {x1,y1,x2,y2};
+  document.getElementById('cropX1').value = x1;
+  document.getElementById('cropY1').value = y1;
+  document.getElementById('cropX2').value = x2;
+  document.getElementById('cropY2').value = y2;
+  updateCropOverlay();
+}
+
+function updateCropFromInputs() {
+  cropRect = {
+    x1: Math.min(parseFloat(document.getElementById('cropX1').value)||0, 99),
+    y1: Math.min(parseFloat(document.getElementById('cropY1').value)||0, 99),
+    x2: Math.max(parseFloat(document.getElementById('cropX2').value)||100, 1),
+    y2: Math.max(parseFloat(document.getElementById('cropY2').value)||100, 1),
+  };
+  updateCropOverlay();
+}
+
+// Mouse drag on canvas
+const canvas = document.getElementById('previewCanvas');
+let mouseDown = false, dragSX=0, dragSY=0;
+
+canvas.addEventListener('mousedown', e => {
+  const rect = canvas.getBoundingClientRect();
+  dragSX = (e.clientX - rect.left) / canvas.width * 100;
+  dragSY = (e.clientY - rect.top) / canvas.height * 100;
+  mouseDown = true;
+});
+canvas.addEventListener('mousemove', e => {
+  if (!mouseDown) return;
+  const rect = canvas.getBoundingClientRect();
+  const ex = (e.clientX - rect.left) / canvas.width * 100;
+  const ey = (e.clientY - rect.top) / canvas.height * 100;
+  cropRect = {
+    x1: Math.min(dragSX, ex), y1: Math.min(dragSY, ey),
+    x2: Math.max(dragSX, ex), y2: Math.max(dragSY, ey)
+  };
+  document.getElementById('cropX1').value = cropRect.x1.toFixed(1);
+  document.getElementById('cropY1').value = cropRect.y1.toFixed(1);
+  document.getElementById('cropX2').value = cropRect.x2.toFixed(1);
+  document.getElementById('cropY2').value = cropRect.y2.toFixed(1);
+  updateCropOverlay();
+});
+canvas.addEventListener('mouseup', () => { mouseDown = false; });
+canvas.addEventListener('mouseleave', () => { mouseDown = false; });
+
+// Touch support
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const touch = e.touches[0];
+  const rect = canvas.getBoundingClientRect();
+  dragSX = (touch.clientX - rect.left) / canvas.width * 100;
+  dragSY = (touch.clientY - rect.top) / canvas.height * 100;
+  mouseDown = true;
+});
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (!mouseDown) return;
+  const touch = e.touches[0];
+  const rect = canvas.getBoundingClientRect();
+  const ex = (touch.clientX - rect.left) / canvas.width * 100;
+  const ey = (touch.clientY - rect.top) / canvas.height * 100;
+  cropRect = {
+    x1: Math.min(dragSX, ex), y1: Math.min(dragSY, ey),
+    x2: Math.max(dragSX, ex), y2: Math.max(dragSY, ey)
+  };
+  document.getElementById('cropX1').value = cropRect.x1.toFixed(1);
+  document.getElementById('cropY1').value = cropRect.y1.toFixed(1);
+  document.getElementById('cropX2').value = cropRect.x2.toFixed(1);
+  document.getElementById('cropY2').value = cropRect.y2.toFixed(1);
+  updateCropOverlay();
+});
+canvas.addEventListener('touchend', () => { mouseDown = false; });
+
+async function changePage(delta) {
+  const np = cropCurrentPage + delta;
+  if (np < 1 || np > cropTotalPages) return;
+  cropCurrentPage = np;
+  await renderCropPreview();
+}
+
+async function cropAndDownload() {
+  if (!cropPdfDoc) return;
+  const PDFDocument = (window.PDFLib && window.PDFLib.PDFDocument)
+    ? window.PDFLib.PDFDocument
+    : (typeof PDFLib !== 'undefined' ? PDFLib.PDFDocument : null);
+  if (!PDFDocument) { showToast('PDF-lib not loaded', 'error'); return; }
+
+  const applyAll = document.querySelector('input[name="applyPages"]:checked').value === 'all';
+  const results = [];
+
+  try {
+    const pageNums = applyAll ? Array.from({length: cropTotalPages}, (_,i)=>i+1) : [cropCurrentPage];
+
+    for (const pageNum of pageNums) {
+      const newDoc = await PDFDocument.create();
+      const [copiedPage] = await newDoc.copyPages(cropPdfDoc, [pageNum - 1]);
+      newDoc.addPage(copiedPage);
+
+      const page = newDoc.getPage(0);
+      const {width, height} = page.getSize();
+
+      const x = cropRect.x1 / 100 * width;
+      const y = (100 - cropRect.y2) / 100 * height;
+      const w = (cropRect.x2 - cropRect.x1) / 100 * width;
+      const h = (cropRect.y2 - cropRect.y1) / 100 * height;
+
+      page.setCropBox(x, y, w, h);
+      page.setMediaBox(x, y, w, h);
+      page.setBleedBox(x, y, w, h);
+      page.setTrimBox(x, y, w, h);
+
+      const pdfBytes = await newDoc.save();
+      results.push({bytes: pdfBytes, page: pageNum});
+    }
+
+    if (results.length === 1) {
+      downloadBytes(results[0].bytes, `cropped-page${results[0].page}.pdf`);
+      showToast('Cropped & downloaded!');
+    } else {
+      showResults(results);
+      showToast(`${results.length} pages cropped!`);
+    }
+  } catch(e) {
+    showToast('Crop error: ' + e.message, 'error');
+  }
+}
+
+function showResults(results) {
+  const grid = document.getElementById('cropResultsGrid');
+  const wrap = document.getElementById('cropResults');
+  grid.innerHTML = '';
+
+  // Store results for bulk download
+  window._cropResults = results;
+
+  // Add Download All button above grid
+  const dlAllWrap = document.getElementById('cropDlAllWrap') || (() => {
+    const d = document.createElement('div');
+    d.id = 'cropDlAllWrap';
+    d.style.cssText = 'margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;';
+    wrap.insertBefore(d, grid);
+    return d;
+  })();
+  dlAllWrap.innerHTML = `
+    <button class="btn btn-success" onclick="downloadAllCropped()">⬇ Download All as One PDF (${results.length} pages)</button>
+    <button class="btn btn-secondary" onclick="downloadAllSeparate()">⬇ Download All Separately</button>`;
+
+  results.forEach(r => {
+    const card = document.createElement('div');
+    card.className = 'result-card';
+    const url = URL.createObjectURL(new Blob([r.bytes], {type:'application/pdf'}));
+    card.innerHTML = `
+      <div class="result-thumb">📄</div>
+      <div class="result-info">
+        <div class="r-name">Page ${r.page}</div>
+        <div class="r-meta">${(r.bytes.length/1024).toFixed(1)} KB</div>
+        <a class="r-dl" href="${url}" download="cropped-page${r.page}.pdf">⬇ Download</a>
+      </div>`;
+    grid.appendChild(card);
+  });
+  wrap.style.display = 'block';
+}
+
+async function downloadAllCropped() {
+  const results = window._cropResults;
+  if (!results || results.length === 0) return;
+  try {
+    const PDFDocument = (window.PDFLib && window.PDFLib.PDFDocument)
+      ? window.PDFLib.PDFDocument
+      : PDFLib.PDFDocument;
+    const combined = await PDFDocument.create();
+    for (const r of results) {
+      const srcDoc = await PDFDocument.load(r.bytes.slice ? r.bytes.slice(0) : r.bytes);
+      const [pg] = await combined.copyPages(srcDoc, [0]);
+      combined.addPage(pg);
+    }
+    const bytes = await combined.save();
+    downloadBytes(bytes, 'all-cropped-pages.pdf');
+    showToast('All pages downloaded as one PDF!');
+  } catch(e) {
+    showToast('Error: ' + e.message, 'error');
+  }
+}
+
+function downloadAllSeparate() {
+  const results = window._cropResults;
+  if (!results) return;
+  results.forEach((r, i) => {
+    setTimeout(() => downloadBytes(r.bytes, `cropped-page${r.page}.pdf`), i * 300);
+  });
+  showToast(`Downloading ${results.length} files…`);
+}
+
+function downloadBytes(bytes, filename) {
+  const blob = new Blob([bytes], {type:'application/pdf'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
+}
+
+function resetCrop() {
+  cropFile = null; cropPdfDoc = null; cropPdfJsDoc = null;
+  document.getElementById('cropWorkspace').style.display = 'none';
+  document.getElementById('cropFileWrap').style.display = 'block';
+  document.getElementById('cropResults').style.display = 'none';
+  document.getElementById('cropInput').value = '';
+  cropRect = {x1:0, y1:0, x2:100, y2:100};
+}
+</script>
+</body>
+</html>
